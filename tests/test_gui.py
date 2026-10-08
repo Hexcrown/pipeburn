@@ -11,6 +11,8 @@ pytest.importorskip("PySide6")
 from PySide6.QtCore import QCoreApplication, QEventLoop, QTimer  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
+from pipeburn import gui, logs  # noqa: E402
+from pipeburn.core import PipeburnError  # noqa: E402
 from pipeburn.gui import MainWindow  # noqa: E402
 
 
@@ -33,7 +35,8 @@ def spin_until(condition, timeout=30.0):
 
 
 @pytest.fixture
-def window(qapp, tmp_path):
+def window(qapp, tmp_path, clean_logging):
+    logs.setup_logging(log_file=False)
     out = tmp_path / "out.img"
     win = MainWindow(dry_run_path=str(out))
     win.messages = []
@@ -95,3 +98,44 @@ def test_declined_confirmation_starts_nothing(window):
     window.url_edit.setText("https://example.org/x.iso")
     window.start_btn.click()
     assert not window._running and not window.out.exists()
+
+
+def test_worker_log_events_reach_the_pane_and_the_report(window, server, image_data):
+    server.serve("/img?token=SECRET", image_data)
+    window.url_edit.setText(server.url("/img?token=SECRET"))
+    window.start_btn.click()
+    spin_until(lambda: not window._running)
+    pane = window.log_view.toPlainText()
+    assert "Compression: none" in pane and "Helper exited with code 0" in pane
+    report = window._log_report()
+    assert report.startswith("Pipeburn ") and "Compression: none" in report
+    assert "SECRET" not in pane and "SECRET" not in report
+
+
+def test_copy_log_button(window):
+    window.copy_btn.click()
+    assert "Log copied" in window.status.text()
+
+
+def test_helper_command_log_hides_url_secrets(window):
+    text = window._safe_command(
+        ["python", "--url=https://u:p@example.org/a.iso?token=SECRET", "--device=/dev/sdb"]
+    )
+    assert "SECRET" not in text and "u:p" not in text and "example.org/a.iso" in text
+
+
+def test_debug_flag_reaches_the_helper_command(qapp, tmp_path, monkeypatch, clean_logging):
+    seen = {}
+
+    def fake_build_command(**kwargs):
+        seen.update(kwargs)
+        raise PipeburnError("stop here")
+
+    monkeypatch.setattr(gui, "build_command", fake_build_command)
+    win = MainWindow(dry_run_path=str(tmp_path / "o.img"), debug=True)
+    win._message = lambda *args: None
+    win._confirm = lambda device: True
+    win.url_edit.setText("https://example.org/x.iso")
+    win.start_btn.click()
+    win.close()
+    assert seen["debug"] is True and seen["dry_run"] is True

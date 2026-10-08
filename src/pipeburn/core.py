@@ -12,6 +12,7 @@ from __future__ import annotations
 import errno
 import hashlib
 import http.client
+import logging
 import lzma
 import os
 import threading
@@ -24,10 +25,14 @@ from dataclasses import asdict, dataclass
 from typing import Callable, Optional
 
 from . import __version__
+from .logs import redact_url
 from .util import human_bytes
+
+log = logging.getLogger(__name__)
 
 READ_CHUNK = 1024 * 1024
 WRITE_CHUNK = 4 * 1024 * 1024
+_LOG_STEP = 256 * 1024 * 1024  # debug-log write progress every this many bytes
 USER_AGENT = f"pipeburn/{__version__} (+https://github.com/Hexcrown/pipeburn)"
 _BLKFLSBUF = 0x1261  # Linux ioctl: flush and invalidate a block device's cache
 
@@ -260,14 +265,14 @@ def _drop_cache(fd: int) -> None:
     """Best effort: make a later read-back hit the device, not the page cache."""
     try:
         os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
-    except (AttributeError, OSError):
-        pass
+    except (AttributeError, OSError) as e:
+        log.debug("posix_fadvise skipped: %s", e)
     try:
         import fcntl
 
         fcntl.ioctl(fd, _BLKFLSBUF)
-    except Exception:  # not a block device, not root, or not Linux
-        pass
+    except Exception as e:  # not a block device, not root, or not Linux
+        log.debug("Cache flush ioctl skipped: %s", e)
 
 
 def _write_error(e: OSError, target: str) -> PipeburnError:
@@ -316,12 +321,16 @@ def verify_readback(
             _check_cancel(cancel)
             data = f.read(min(WRITE_CHUNK, length - done))
             if not data:
+                log.warning("Read-back ended early at %d of %d bytes", done, length)
                 return False  # target shorter than what we wrote
             digest.update(data)
             done += len(data)
             if progress is not None:
                 progress("verify", done, length)
-    return digest.hexdigest() == expected_digest
+    matches = digest.hexdigest() == expected_digest
+    if not matches:
+        log.warning("Read-back hash differs: expected %s, got %s", expected_digest, digest.hexdigest())
+    return matches
 
 
 def burn(
@@ -346,13 +355,27 @@ def burn(
     if decompress not in ("auto", "none"):
         raise ValueError("decompress must be 'auto' or 'none'")
     emit = _Throttle(progress)
+    log.info(
+        "Starting: url=%s target=%s verify=%s decompress=%s checksum_given=%s",
+        redact_url(url), target, verify, decompress, expected is not None,
+    )
 
     with open_url(url, timeout) as resp:
         total = _content_length(resp)
+        log.debug(
+            "HTTP %s from %s (content-type %s, content-length %s)",
+            getattr(resp, "status", "?"), redact_url(resp.geturl()),
+            resp.headers.get("Content-Type"), total,
+        )
         first = _read_chunk(resp)
         if not first:
             raise PipeburnError("The server returned an empty file.")
+        log.debug("First bytes: %s", first[:8].hex())
         compression = "none" if decompress == "none" else detect_compression(first)
+        log.info(
+            "Compression: %s; %s", compression,
+            f"{human_bytes(total)} to download" if total is not None else "size unknown",
+        )
 
         # An uncompressed image that cannot fit is rejected before anything is written.
         if compression == "none" and device_size is not None and total is not None and total > device_size:
@@ -378,6 +401,8 @@ def burn(
                         )
                     _write_all(out, buf)
                     sha_out.update(buf)
+                    if (written + len(buf)) // _LOG_STEP != written // _LOG_STEP:
+                        log.debug("Wrote %s so far", human_bytes(written + len(buf)))
                     written += len(buf)
                     buf.clear()
 
@@ -407,14 +432,21 @@ def burn(
     emit("write", downloaded, total, force=True)
 
     digest = sha_in.hexdigest()
+    log.info(
+        "Download complete: %s received, %s written, sha256 %s",
+        human_bytes(downloaded), human_bytes(written), digest,
+    )
     if expected is not None and digest != expected:
         raise ChecksumMismatch(
             f"SHA256 mismatch.\nExpected: {expected}\nGot:      {digest}\n"
             "The drive now holds a bad image; do not boot from it."
         )
+    if expected is not None:
+        log.info("SHA256 matches the expected value")
 
     verified: Optional[bool] = None
     if verify:
+        log.info("Verifying what was written (%s)", human_bytes(written))
         if not verify_readback(target, written, sha_out.hexdigest(), progress=emit, cancel=cancel):
             raise VerifyError(
                 "Read-back check failed: the drive did not keep what was written "
@@ -422,5 +454,6 @@ def burn(
             )
         emit("verify", written, written, force=True)
         verified = True
+        log.info("Read-back verification passed")
 
     return Result(downloaded, written, digest, compression, verified)

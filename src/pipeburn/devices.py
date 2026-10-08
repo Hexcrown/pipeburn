@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
 from dataclasses import dataclass
@@ -10,6 +11,8 @@ from typing import Callable, Optional
 
 from .core import PipeburnError
 from .util import human_bytes
+
+log = logging.getLogger(__name__)
 
 
 class DeviceError(PipeburnError):
@@ -116,7 +119,9 @@ def lsblk_json() -> dict:
 
 
 def list_usb_devices() -> list:
-    return parse_lsblk(lsblk_json())
+    devices = parse_lsblk(lsblk_json())
+    log.debug("lsblk reports %d usable USB disk(s): %s", len(devices), [d.path for d in devices])
+    return devices
 
 
 def validate_target(path: str, devices: Optional[list] = None) -> Device:
@@ -124,6 +129,7 @@ def validate_target(path: str, devices: Optional[list] = None) -> Device:
     real = os.path.realpath(path)
     for device in devices if devices is not None else list_usb_devices():
         if os.path.realpath(device.path) == real:
+            log.info("Target %s resolved to %s (%s, %s)", path, device.path, device.label, human_bytes(device.size))
             return device
     raise DeviceError(
         f"{path} is not a writable USB disk (or it holds the running system); refusing to write."
@@ -132,6 +138,7 @@ def validate_target(path: str, devices: Optional[list] = None) -> Device:
 
 def unmount_all(device: Device, runner: Callable = subprocess.run) -> None:
     for mountpoint in device.mountpoints:
+        log.info("Unmounting %s", mountpoint)
         proc = runner(["umount", mountpoint], capture_output=True, text=True)
         if proc.returncode != 0:
             raise DeviceError(f"Could not unmount {mountpoint}: {proc.stderr.strip()}")
@@ -147,5 +154,5 @@ def reread_partitions(path: str) -> None:
             fcntl.ioctl(fd, 0x125F)  # BLKRRPART
         finally:
             os.close(fd)
-    except Exception:
-        pass
+    except Exception as e:
+        log.debug("Partition table re-read skipped: %s", e)

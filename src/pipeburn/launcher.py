@@ -19,6 +19,7 @@ def build_command(
     verify: bool = True,
     decompress: bool = True,
     dry_run: bool = False,
+    debug: bool = False,
 ) -> list:
     command = []
     needs_root = not dry_run and hasattr(os, "geteuid") and os.geteuid() != 0
@@ -43,4 +44,6 @@ def build_command(
         command.append("--no-decompress")
     if dry_run:
         command.append("--dry-run")
+    if debug:
+        command.append("--debug")
     return command

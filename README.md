@@ -35,6 +35,14 @@ The worker re-checks the target itself, so a bug or tampering in the GUI cannot 
 - **SHA256** is computed over the bytes as downloaded, so it matches the checksum a distro publishes even for `.xz` / `.gz` / `.zst` downloads.
 - **Read-back verification** re-reads what was written and compares hashes (best effort at bypassing the page cache).
 
+## Logging and debugging
+
+- **Log file:** `~/.local/state/pipeburn/pipeburn.log` (or `$XDG_STATE_HOME/pipeburn/`), rotating at about 1 MB with three older files kept. The same lines show in the window's log pane.
+- **`pipeburn --debug`** adds detail (HTTP headers, first bytes of the image, write progress, drive lookups) and turns on debug logging in the root helper too.
+- **Copy log** puts the session log, with version and Python info, on the clipboard. Paste it into a bug report.
+- **The helper runs as root and never writes into your home directory.** Its log lines are sent to the GUI, which writes them to the file. Unexpected errors include a full traceback.
+- **Secrets stay out.** URLs are logged without credentials, query strings or fragments (signed download links keep secrets there), and your home directory shows as `~` in copied logs. A log can still contain drive names, file paths and a checksum you entered, so skim it before posting publicly.
+
 ## Limits
 
 - **No resume.** If the connection drops mid-write, the drive is half-written; start over.
@@ -57,6 +65,7 @@ src/pipeburn/
   devices.py    USB-only discovery and safety checks (lsblk)
   worker.py     privileged helper, reports JSON lines
   launcher.py   builds the pkexec command
+  logs.py       log file, in-memory log for Copy log, URL redaction
   gui.py        PySide6 window
 ```
 

@@ -1,5 +1,6 @@
 import gzip
 import hashlib
+import logging
 import lzma
 import threading
 
@@ -191,3 +192,29 @@ def test_detect_compression():
     assert core.detect_compression(lzma.compress(b"x")) == "xz"
     assert core.detect_compression(b"\x28\xb5\x2f\xfd....") == "zstd"
     assert core.detect_compression(b"\x00" * 32768) == "none"
+
+
+def test_logging_records_key_steps_and_redacts_url_secrets(server, tmp_path, image_data, captured_logs):
+    server.serve("/img?token=SECRET", image_data)
+    core.burn(server.url("/img?token=SECRET"), str(tmp_path / "out.img"), expected_sha256=sha(image_data))
+    text = "\n".join(r.getMessage() for r in captured_logs)
+    assert "SECRET" not in text
+    for expected in ("Starting", "Compression: none", "Download complete", "SHA256 matches",
+                     "Read-back verification passed"):
+        assert expected in text
+
+
+def test_debug_logging_includes_http_details(server, tmp_path, image_data, captured_logs):
+    server.serve("/img", image_data)
+    burn(server, tmp_path, verify=False)
+    debug = [r.getMessage() for r in captured_logs if r.levelno == logging.DEBUG]
+    assert any(m.startswith("HTTP 200") for m in debug)
+    assert any(m.startswith("First bytes") for m in debug)
+
+
+def test_readback_mismatch_is_logged_as_a_warning(tmp_path, captured_logs):
+    path = tmp_path / "dev.img"
+    path.write_bytes(b"A" * 1000)
+    assert not core.verify_readback(str(path), 1000, "0" * 64)
+    warnings = [r.getMessage() for r in captured_logs if r.levelno == logging.WARNING]
+    assert any("differs" in m for m in warnings)

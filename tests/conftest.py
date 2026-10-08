@@ -1,4 +1,5 @@
 import http.server
+import logging
 import os
 import random
 import sys
@@ -115,3 +116,32 @@ def server():
 def image_data():
     # Bigger than one write chunk (4 MiB) and not a multiple of any chunk size.
     return random.Random(1).randbytes(5 * 1024 * 1024 + 17)
+
+
+@pytest.fixture
+def clean_logging():
+    """Undo whatever setup_logging / the worker did to the shared "pipeburn" logger."""
+    from pipeburn import logs
+
+    logs.reset_logging()
+    yield
+    logs.reset_logging()
+
+
+@pytest.fixture
+def captured_logs():
+    """Every record the pipeburn loggers emit during the test, debug level included."""
+    records = []
+
+    class Collector(logging.Handler):
+        def emit(self, record):
+            records.append(record)
+
+    logger = logging.getLogger("pipeburn")
+    old_level = logger.level
+    handler = Collector()
+    logger.setLevel(logging.DEBUG)
+    logger.addHandler(handler)
+    yield records
+    logger.removeHandler(handler)
+    logger.setLevel(old_level)

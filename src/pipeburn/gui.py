@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import re
 import sys
+from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import QProcess
@@ -28,7 +30,10 @@ from PySide6.QtWidgets import (
 from .core import PipeburnError
 from .devices import Device, list_usb_devices
 from .launcher import build_command
+from .logs import LOGGER_NAME, build_report, recent_lines, redact_url, setup_logging
 from .util import human_bytes, human_duration
+
+log = logging.getLogger("pipeburn.gui")
 
 _PHASE_TEXT = {
     "check": "Checking the drive...",
@@ -40,12 +45,36 @@ _PROGRESS_LABEL = {"write": "Writing", "verify": "Verifying"}
 _PROGRESS_STEPS = 1000
 
 
+class _PaneHandler(logging.Handler):
+    """Mirrors log records into the window's log pane."""
+
+    def __init__(self, view):
+        super().__init__()
+        self._view = view
+        self.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s", "%H:%M:%S"))
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            self._view.appendPlainText(self.format(record))
+        except RuntimeError:  # the widget was deleted
+            logging.getLogger(LOGGER_NAME).removeHandler(self)
+        except Exception:
+            self.handleError(record)
+
+
 class MainWindow(QWidget):
-    def __init__(self, dry_run_path: Optional[str] = None):
+    def __init__(
+        self,
+        dry_run_path: Optional[str] = None,
+        debug: bool = False,
+        log_path: Optional[Path] = None,
+    ):
         super().__init__()
         self.setWindowTitle("Pipeburn")
         self.resize(660, 540)
         self._dry_run_path = dry_run_path
+        self._debug = debug
+        self._log_path = log_path
         self._proc: Optional[QProcess] = None
         self._buffer = ""
         self._running = False
@@ -71,10 +100,13 @@ class MainWindow(QWidget):
         form.addRow("Drive", device_row)
         form.addRow("", self.verify_check)
 
+        self.copy_btn = QPushButton("Copy log")
+        self.copy_btn.setToolTip("Copy the session log, with version info, to the clipboard for a bug report")
         self.start_btn = QPushButton("Burn")
         self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.setEnabled(False)
         buttons = QHBoxLayout()
+        buttons.addWidget(self.copy_btn)
         buttons.addStretch(1)
         buttons.addWidget(self.cancel_btn)
         buttons.addWidget(self.start_btn)
@@ -83,9 +115,9 @@ class MainWindow(QWidget):
         self.progress.setRange(0, _PROGRESS_STEPS)
         self.status = QLabel("Ready.")
         self.status.setWordWrap(True)
-        self.log = QPlainTextEdit()
-        self.log.setReadOnly(True)
-        self.log.setMaximumBlockCount(500)
+        self.log_view = QPlainTextEdit()
+        self.log_view.setReadOnly(True)
+        self.log_view.setMaximumBlockCount(500)
 
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel("<b>Pipeburn</b> - stream an ISO straight from a URL to a USB drive"))
@@ -93,9 +125,13 @@ class MainWindow(QWidget):
         layout.addLayout(buttons)
         layout.addWidget(self.progress)
         layout.addWidget(self.status)
-        layout.addWidget(self.log, 1)
+        layout.addWidget(self.log_view, 1)
+
+        self._pane_handler = _PaneHandler(self.log_view)
+        logging.getLogger(LOGGER_NAME).addHandler(self._pane_handler)
 
         self.refresh_btn.clicked.connect(self.refresh_devices)
+        self.copy_btn.clicked.connect(self.copy_log)
         self.start_btn.clicked.connect(self.start)
         self.cancel_btn.clicked.connect(self.cancel)
         self.refresh_devices()
@@ -134,6 +170,15 @@ class MainWindow(QWidget):
             widget.setEnabled(not running)
         self.cancel_btn.setEnabled(running)
 
+    @staticmethod
+    def _safe_command(command: list) -> str:
+        parts = [("--url=" + redact_url(arg[len("--url="):])) if arg.startswith("--url=") else arg
+                 for arg in command]
+        return " ".join(parts)
+
+    def _log_report(self) -> str:
+        return build_report(self._log_path, self._debug)
+
     # ----- devices -------------------------------------------------------
 
     def refresh_devices(self) -> None:
@@ -145,6 +190,7 @@ class MainWindow(QWidget):
         try:
             devices = list_usb_devices()
         except PipeburnError as e:
+            log.warning("Could not list drives: %s", e)
             self._set_status(str(e))
             return
         for device in devices:
@@ -153,6 +199,12 @@ class MainWindow(QWidget):
             self._set_status("No USB drives found. Plug one in and press Refresh.")
         else:
             self._set_status("Ready.")
+
+    def copy_log(self) -> None:
+        QApplication.clipboard().setText(self._log_report())
+        log.info("Log copied to the clipboard")
+        if not self._running:
+            self._set_status(f"Log copied to the clipboard ({len(recent_lines())} lines).")
 
     # ----- running -------------------------------------------------------
 
@@ -170,25 +222,32 @@ class MainWindow(QWidget):
             self._message("warn", "Pipeburn", "Select a USB drive first.")
             return
         if not self._confirm(device):
+            log.info("Burn declined at the confirmation dialog")
             return
+        target = self._dry_run_path or device.path
         try:
             command = build_command(
                 url=url,
-                device=self._dry_run_path or device.path,
+                device=target,
                 sha256=sha,
                 verify=self.verify_check.isChecked(),
                 dry_run=bool(self._dry_run_path),
+                debug=self._debug,
             )
         except PipeburnError as e:
+            log.error("Could not build the helper command: %s", e)
             self._message("error", "Pipeburn", str(e))
             return
+
+        log.info("Burn requested: url=%s device=%s verify=%s dry_run=%s",
+                 redact_url(url), target, self.verify_check.isChecked(), bool(self._dry_run_path))
+        log.debug("Helper command: %s", self._safe_command(command))
 
         self._buffer = ""
         self._done = self._error = None
         self._saw_progress = False
         self.progress.setRange(0, _PROGRESS_STEPS)
         self.progress.setValue(0)
-        self.log.clear()
         self._set_status("Starting...")
         self._set_running(True)
 
@@ -201,6 +260,7 @@ class MainWindow(QWidget):
 
     def cancel(self) -> None:
         if self._proc is not None:
+            log.info("Cancel requested")
             self._proc.write(b"cancel\n")
             self.cancel_btn.setEnabled(False)
             self._set_status("Cancelling...")
@@ -223,16 +283,24 @@ class MainWindow(QWidget):
         if isinstance(event, dict) and "event" in event:
             self._handle_event(event)
         else:
-            self.log.appendPlainText(line)  # e.g. pkexec's own messages
+            log.warning("Helper output: %s", line)  # e.g. pkexec's own messages
 
     def _handle_event(self, event: dict) -> None:
         kind = event["event"]
-        if kind == "phase":
+        if kind == "log":
+            name = str(event.get("logger") or "")
+            level = getattr(logging, str(event.get("level", "INFO")).upper(), logging.INFO)
+            if not isinstance(level, int):
+                level = logging.INFO
+            logging.getLogger(name if name.startswith("pipeburn") else "pipeburn.worker").log(
+                level, "%s", event.get("message", "")
+            )
+        elif kind == "phase":
             name = event.get("name", "")
             self.progress.setRange(0, _PROGRESS_STEPS)
             self.progress.setValue(0)
             self._set_status(_PHASE_TEXT.get(name, name))
-            self.log.appendPlainText(_PHASE_TEXT.get(name, name))
+            log.info(_PHASE_TEXT.get(name, name))
         elif kind == "progress":
             self._saw_progress = True
             done, total = event.get("done", 0), event.get("total")
@@ -263,6 +331,7 @@ class MainWindow(QWidget):
         if proc is not None:
             proc.deleteLater()
         self._set_running(False)
+        log.info("Helper exited with code %s", exit_code)
 
         if self._done is not None:
             self.progress.setRange(0, _PROGRESS_STEPS)
@@ -278,13 +347,17 @@ class MainWindow(QWidget):
                 self._set_status("Failed: " + message.splitlines()[0])
                 self._message("error", "Burn failed", message)
         elif exit_code in (126, 127):
+            log.warning("Authentication was cancelled or failed (exit code %s)", exit_code)
             self._set_status("Authentication was cancelled or failed.")
         else:
+            log.error("The helper stopped without a result (exit code %s)", exit_code)
             self._set_status(f"The helper stopped unexpectedly (exit code {exit_code}).")
-            self._message("error", "Burn failed", self.log.toPlainText() or "The helper stopped unexpectedly.")
+            self._message("error", "Burn failed",
+                          self.log_view.toPlainText() or "The helper stopped unexpectedly.")
 
     def _on_proc_error(self, error) -> None:
         if error == QProcess.ProcessError.FailedToStart:
+            log.error("The helper process failed to start")
             self._proc = None
             self._set_running(False)
             self._set_status("Could not start the helper process.")
@@ -294,6 +367,7 @@ class MainWindow(QWidget):
         if self._proc is not None:
             self._proc.write(b"cancel\n")
             self._proc.waitForFinished(5000)
+        logging.getLogger(LOGGER_NAME).removeHandler(self._pane_handler)
         super().closeEvent(event)
 
 
@@ -301,9 +375,13 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="pipeburn", description="Stream an ISO from a URL to a USB drive.")
     parser.add_argument("--dry-run", metavar="FILE",
                         help="write to FILE instead of a USB drive (a safe way to try the app)")
+    parser.add_argument("--debug", action="store_true",
+                        help="verbose logging, also inside the helper")
     args, qt_args = parser.parse_known_args(argv)
+    log_path = setup_logging(debug=args.debug)
     app = QApplication([sys.argv[0], *qt_args])
-    window = MainWindow(dry_run_path=args.dry_run)
+    window = MainWindow(dry_run_path=args.dry_run, debug=args.debug, log_path=log_path)
+    log.info("Pipeburn started (debug=%s); log file: %s", args.debug, log_path or "none")
     window.show()
     return app.exec()
 

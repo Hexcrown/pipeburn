@@ -35,6 +35,12 @@ def test_missing_pkexec_is_a_clear_error(monkeypatch):
         launcher.build_command(url="http://x/a.iso", device="/dev/sdb")
 
 
+def test_debug_flag_is_forwarded_only_when_asked(monkeypatch):
+    monkeypatch.setattr(launcher.os, "geteuid", lambda: 0)
+    assert "--debug" not in launcher.build_command(url="http://x/a.iso", device="/dev/sdb")
+    assert "--debug" in launcher.build_command(url="http://x/a.iso", device="/dev/sdb", debug=True)
+
+
 def test_options_and_values_are_not_confusable(monkeypatch):
     monkeypatch.setattr(launcher.os, "geteuid", lambda: 0)
     cmd = launcher.build_command(
