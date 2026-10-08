@@ -8,13 +8,11 @@ Paste a link, pick a drive, and Pipeburn streams the image directly to the devic
 
 ## Install
 
-**Debian, Ubuntu, Mint.** Download the `.deb` from the [latest release](https://github.com/Hexcrown/pipeburn/releases/latest):
+**Debian, Ubuntu, Mint.** Download the `.deb` for your CPU (`amd64` or `arm64`) from the [latest release](https://github.com/Hexcrown/pipeburn/releases/latest). It carries its own PySide6, so nothing else is needed:
 
 ```bash
-sudo apt install ./pipeburn_*_all.deb
+sudo apt install ./pipeburn_*.deb
 ```
-
-If your distro has no `python3-pyside6.qtwidgets` package, add PySide6 once with `pip install --user --break-system-packages PySide6`.
 
 **Arch:** build `packaging/arch/PKGBUILD` with `makepkg -si`.
 

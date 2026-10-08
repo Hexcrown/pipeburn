@@ -23,6 +23,8 @@ cat > "$PKG/usr/bin/pipeburn" <<'LAUNCH'
 #!/usr/bin/python3
 import sys
 
+sys.path.append("/usr/lib/pipeburn/vendor")
+
 try:
     from pipeburn.gui import main
 except ImportError as e:
@@ -53,16 +55,31 @@ fi
 POSTRM
 chmod 755 "$PKG/DEBIAN/postrm"
 
+ARCH=all
+RECOMMENDS="python3-pyside6.qtwidgets, python3-zstandard"
+if [ "${BUNDLE_PYSIDE:-0}" = "1" ]; then
+    VENDOR="$PKG/usr/lib/pipeburn/vendor"
+    mkdir -p "$VENDOR"
+    python3 -m pip install --quiet --target "$VENDOR" --no-warn-script-location \
+        "${PYSIDE_REQ:-PySide6-Essentials>=6.6}"
+    rm -rf "$VENDOR/bin"
+    find "$VENDOR" -type d -exec chmod 755 {} +
+    find "$VENDOR" -type f -exec chmod u=rw,go=r {} +
+    find "$VENDOR" -type f \( -name '*.so' -o -name '*.so.*' \) -exec chmod 755 {} +
+    ARCH=$(dpkg --print-architecture)
+    RECOMMENDS="python3-zstandard"
+fi
+
 SIZE=$(du -sk "$PKG" | cut -f1)
 cat > "$PKG/DEBIAN/control" <<CONTROL
 Package: pipeburn
 Version: $VERSION
 Section: utils
 Priority: optional
-Architecture: all
+Architecture: $ARCH
 Installed-Size: $SIZE
 Depends: python3 (>= 3.10), pkexec | policykit-1, util-linux
-Recommends: python3-pyside6.qtwidgets, python3-zstandard
+Recommends: $RECOMMENDS
 Maintainer: Hexcrown <339384112+Hexcrown@users.noreply.github.com>
 Homepage: https://github.com/Hexcrown/pipeburn
 Description: Write an ISO from a URL straight to a USB drive
@@ -73,5 +90,5 @@ Description: Write an ISO from a URL straight to a USB drive
  removable USB drives.
 CONTROL
 
-dpkg-deb --root-owner-group --build "$PKG" "$OUT/pipeburn_${VERSION}_all.deb" >/dev/null
-echo "$OUT/pipeburn_${VERSION}_all.deb"
+dpkg-deb --root-owner-group --build "$PKG" "$OUT/pipeburn_${VERSION}_${ARCH}.deb" >/dev/null
+echo "$OUT/pipeburn_${VERSION}_${ARCH}.deb"
