@@ -260,3 +260,13 @@ def test_icon_assets_ship_with_the_package():
     assets = Path(core.__file__).parent / "assets"
     for name in ("pipeburn.png", "pipeburn.svg", "pipeburn.icns", "pipeburn.ico"):
         assert (assets / name).stat().st_size > 0
+
+
+def test_theme_stylesheet_is_well_formed():
+    from pipeburn import theme
+
+    css = theme.STYLESHEET
+    assert css.count("{") == css.count("}")
+    for colour in (theme.BG, theme.EMBER, theme.STEEL):
+        assert colour in css
+    assert "QPushButton#primary" in css

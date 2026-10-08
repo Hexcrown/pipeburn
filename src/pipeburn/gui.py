@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 from .core import PipeburnError
 from .devices import Device, list_usb_devices
 from .launcher import build_command
+from .theme import STYLESHEET
 from .logs import LOGGER_NAME, build_report, recent_lines, redact_url, setup_logging
 from .util import human_bytes, human_duration
 
@@ -72,7 +73,7 @@ class MainWindow(QWidget):
     ):
         super().__init__()
         self.setWindowTitle("Pipeburn")
-        self.resize(660, 540)
+        self.resize(700, 620)
         self._dry_run_path = dry_run_path
         self._debug = debug
         self._log_path = log_path
@@ -96,14 +97,19 @@ class MainWindow(QWidget):
         self.verify_check.setChecked(True)
 
         form = QFormLayout()
-        form.addRow("Image URL", self.url_edit)
-        form.addRow("SHA256", self.sha_edit)
-        form.addRow("Drive", device_row)
+        form.setHorizontalSpacing(16)
+        form.setVerticalSpacing(12)
+        for text, field in (("Image URL", self.url_edit), ("SHA256", self.sha_edit), ("Drive", device_row)):
+            label = QLabel(text)
+            label.setObjectName("fieldLabel")
+            form.addRow(label, field)
         form.addRow("", self.verify_check)
 
         self.copy_btn = QPushButton("Copy log")
         self.copy_btn.setToolTip("Copy the session log, with version info, to the clipboard for a bug report")
         self.start_btn = QPushButton("Burn")
+        self.start_btn.setObjectName("primary")
+        self.copy_btn.setObjectName("ghost")
         self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.setEnabled(False)
         buttons = QHBoxLayout()
@@ -115,13 +121,16 @@ class MainWindow(QWidget):
         self.progress = QProgressBar()
         self.progress.setRange(0, _PROGRESS_STEPS)
         self.status = QLabel("Ready.")
+        self.status.setObjectName("status")
         self.status.setWordWrap(True)
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setMaximumBlockCount(500)
 
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("<b>Pipeburn</b> - stream an ISO straight from a URL to a USB drive"))
+        layout.setContentsMargins(28, 24, 28, 24)
+        layout.setSpacing(16)
+        layout.addLayout(self._build_header())
         layout.addLayout(form)
         layout.addLayout(buttons)
         layout.addWidget(self.progress)
@@ -136,6 +145,23 @@ class MainWindow(QWidget):
         self.start_btn.clicked.connect(self.start)
         self.cancel_btn.clicked.connect(self.cancel)
         self.refresh_devices()
+
+    def _build_header(self) -> QHBoxLayout:
+        logo = QLabel()
+        logo.setPixmap(load_icon().pixmap(52, 52))
+        title = QLabel("Pipeburn")
+        title.setObjectName("title")
+        subtitle = QLabel("Stream an ISO straight from a URL to a USB drive")
+        subtitle.setObjectName("subtitle")
+        text = QVBoxLayout()
+        text.setSpacing(0)
+        text.addWidget(title)
+        text.addWidget(subtitle)
+        header = QHBoxLayout()
+        header.setSpacing(14)
+        header.addWidget(logo)
+        header.addLayout(text, 1)
+        return header
 
     # ----- helpers (overridable in tests) --------------------------------
 
@@ -385,6 +411,8 @@ def main(argv=None) -> int:
     args, qt_args = parser.parse_known_args(argv)
     log_path = setup_logging(debug=args.debug)
     app = QApplication([sys.argv[0], *qt_args])
+    app.setStyle("Fusion")
+    app.setStyleSheet(STYLESHEET)
     app.setApplicationName("Pipeburn")
     app.setDesktopFileName("pipeburn")
     icon = load_icon()
