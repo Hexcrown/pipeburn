@@ -139,3 +139,7 @@ def test_debug_flag_reaches_the_helper_command(qapp, tmp_path, monkeypatch, clea
     win.start_btn.click()
     win.close()
     assert seen["debug"] is True and seen["dry_run"] is True
+
+
+def test_app_icon_file_loads(qapp):
+    assert not gui.load_icon().isNull()

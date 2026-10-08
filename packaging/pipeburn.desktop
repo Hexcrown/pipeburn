@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Pipeburn
+Comment=Write an ISO from a URL straight to a USB drive
+Exec=pipeburn
+Icon=pipeburn
+Terminal=false
+Categories=Utility;System;
+StartupWMClass=pipeburn

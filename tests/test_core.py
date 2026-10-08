@@ -252,3 +252,11 @@ def test_certificate_failure_gets_a_helpful_message(monkeypatch):
     monkeypatch.setattr(core.urllib.request, "urlopen", boom)
     with pytest.raises(core.PipeburnError, match="Install Certificates.command"):
         core.open_url("https://example.org/x.iso")
+
+
+def test_icon_assets_ship_with_the_package():
+    from pathlib import Path
+
+    assets = Path(core.__file__).parent / "assets"
+    for name in ("pipeburn.png", "pipeburn.svg", "pipeburn.icns", "pipeburn.ico"):
+        assert (assets / name).stat().st_size > 0

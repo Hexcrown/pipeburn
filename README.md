@@ -69,6 +69,8 @@ src/pipeburn/
   launcher.py   builds the pkexec command
   logs.py       log file, in-memory log for Copy log, URL redaction
   gui.py        PySide6 window
+  assets/       app icon (svg, png, icns, ico)
+packaging/      .desktop launcher for Linux
 ```
 
 ## Roadmap

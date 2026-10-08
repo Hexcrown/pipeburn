@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import QProcess
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -371,6 +372,10 @@ class MainWindow(QWidget):
         super().closeEvent(event)
 
 
+def load_icon() -> QIcon:
+    return QIcon(str(Path(__file__).parent / "assets" / "pipeburn.png"))
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="pipeburn", description="Stream an ISO from a URL to a USB drive.")
     parser.add_argument("--dry-run", metavar="FILE",
@@ -380,6 +385,10 @@ def main(argv=None) -> int:
     args, qt_args = parser.parse_known_args(argv)
     log_path = setup_logging(debug=args.debug)
     app = QApplication([sys.argv[0], *qt_args])
+    app.setApplicationName("Pipeburn")
+    app.setDesktopFileName("pipeburn")
+    icon = load_icon()
+    app.setWindowIcon(icon)
     window = MainWindow(dry_run_path=args.dry_run, debug=args.debug, log_path=log_path)
     log.info("Pipeburn started (debug=%s); log file: %s", args.debug, log_path or "none")
     window.show()
