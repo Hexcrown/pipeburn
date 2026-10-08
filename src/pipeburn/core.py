@@ -216,20 +216,21 @@ def normalize_sha256(value: Optional[str]) -> Optional[str]:
 _FALLBACK_CA_FILES = ("/etc/ssl/cert.pem", "/etc/ssl/certs/ca-certificates.crt")
 
 
+def _certifi_path() -> Optional[str]:
+    try:
+        import certifi
+    except ImportError:
+        return None
+    return certifi.where()
+
+
 def _ssl_context() -> ssl.SSLContext:
     ctx = ssl.create_default_context()
     if ctx.cert_store_stats().get("x509_ca"):
         return ctx
-    candidates = []
-    try:
-        import certifi
-
-        candidates.append(certifi.where())
-    except ImportError:
-        pass
-    candidates.extend(_FALLBACK_CA_FILES)
+    candidates = [_certifi_path(), *_FALLBACK_CA_FILES]
     for path in candidates:
-        if os.path.isfile(path):
+        if path and os.path.isfile(path):
             try:
                 ctx.load_verify_locations(cafile=path)
             except (ssl.SSLError, OSError):

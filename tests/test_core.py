@@ -236,7 +236,7 @@ def test_ssl_context_falls_back_to_a_system_bundle(monkeypatch, tmp_path):
     bundle = tmp_path / "ca.pem"
     bundle.write_text("x")
     monkeypatch.setattr(core.ssl, "create_default_context", lambda: bare)
-    monkeypatch.setitem(__import__("sys").modules, "certifi", None)
+    monkeypatch.setattr(core, "_certifi_path", lambda: None)
     monkeypatch.setattr(core, "_FALLBACK_CA_FILES", (str(bundle),))
     assert core._ssl_context() is bare
     assert str(bundle) in Bare.loaded
