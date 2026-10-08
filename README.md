@@ -18,6 +18,8 @@ pipeburn
 
 Needs `lsblk` and `umount` (util-linux, present on practically every distro) and `pkexec` (polkit) for the root prompt.
 
+On macOS only `--dry-run` works so far. If you see a certificate error with a python.org install, run `Install Certificates.command` from the Python folder in Applications.
+
 Want to look around without touching a drive? Run `pipeburn --dry-run /tmp/test.img`. It writes to a file instead.
 
 ## How it works

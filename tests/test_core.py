@@ -218,3 +218,37 @@ def test_readback_mismatch_is_logged_as_a_warning(tmp_path, captured_logs):
     assert not core.verify_readback(str(path), 1000, "0" * 64)
     warnings = [r.getMessage() for r in captured_logs if r.levelno == logging.WARNING]
     assert any("differs" in m for m in warnings)
+
+
+def test_ssl_context_falls_back_to_a_system_bundle(monkeypatch, tmp_path):
+    import ssl
+
+    class Bare:
+        loaded = []
+
+        def cert_store_stats(self):
+            return {"x509_ca": 0}
+
+        def load_verify_locations(self, cafile=None):
+            self.loaded.append(cafile)
+
+    bare = Bare()
+    bundle = tmp_path / "ca.pem"
+    bundle.write_text("x")
+    monkeypatch.setattr(core.ssl, "create_default_context", lambda: bare)
+    monkeypatch.setitem(__import__("sys").modules, "certifi", None)
+    monkeypatch.setattr(core, "_FALLBACK_CA_FILES", (str(bundle),))
+    assert core._ssl_context() is bare
+    assert str(bundle) in Bare.loaded
+
+
+def test_certificate_failure_gets_a_helpful_message(monkeypatch):
+    import ssl
+    import urllib.error
+
+    def boom(*a, **k):
+        raise urllib.error.URLError(ssl.SSLCertVerificationError("unable to get local issuer certificate"))
+
+    monkeypatch.setattr(core.urllib.request, "urlopen", boom)
+    with pytest.raises(core.PipeburnError, match="Install Certificates.command"):
+        core.open_url("https://example.org/x.iso")

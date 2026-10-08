@@ -15,6 +15,7 @@ import http.client
 import logging
 import lzma
 import os
+import ssl
 import threading
 import time
 import urllib.error
@@ -212,6 +213,32 @@ def normalize_sha256(value: Optional[str]) -> Optional[str]:
     return token
 
 
+_FALLBACK_CA_FILES = ("/etc/ssl/cert.pem", "/etc/ssl/certs/ca-certificates.crt")
+
+
+def _ssl_context() -> ssl.SSLContext:
+    ctx = ssl.create_default_context()
+    if ctx.cert_store_stats().get("x509_ca"):
+        return ctx
+    candidates = []
+    try:
+        import certifi
+
+        candidates.append(certifi.where())
+    except ImportError:
+        pass
+    candidates.extend(_FALLBACK_CA_FILES)
+    for path in candidates:
+        if os.path.isfile(path):
+            try:
+                ctx.load_verify_locations(cafile=path)
+            except (ssl.SSLError, OSError):
+                continue
+            log.debug("No default CA certificates; loaded %s", path)
+            return ctx
+    return ctx
+
+
 def open_url(url: str, timeout: float = 30.0):
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
@@ -220,11 +247,19 @@ def open_url(url: str, timeout: float = 30.0):
         url, headers={"User-Agent": USER_AGENT, "Accept-Encoding": "identity"}
     )
     try:
-        resp = urllib.request.urlopen(request, timeout=timeout)
+        resp = urllib.request.urlopen(request, timeout=timeout, context=_ssl_context())
     except urllib.error.HTTPError as e:
         raise PipeburnError(f"The server answered HTTP {e.code} {e.reason}.") from e
     except (urllib.error.URLError, OSError) as e:
-        raise PipeburnError(f"Could not connect: {getattr(e, 'reason', e)}") from e
+        reason = getattr(e, "reason", e)
+        if isinstance(reason, ssl.SSLCertVerificationError):
+            raise PipeburnError(
+                f"Could not verify the server's certificate: {reason}\n"
+                "Python has no trusted CA certificates. On macOS run "
+                "'Install Certificates.command' from your Python folder in Applications, "
+                "or 'pip install certifi'; or set SSL_CERT_FILE to a CA bundle."
+            ) from e
+        raise PipeburnError(f"Could not connect: {reason}") from e
     if urllib.parse.urlparse(resp.geturl()).scheme not in ("http", "https"):
         resp.close()
         raise PipeburnError("The server redirected to a non-HTTP address; refusing.")
