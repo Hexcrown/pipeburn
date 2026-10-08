@@ -23,7 +23,15 @@ cat > "$PKG/usr/bin/pipeburn" <<'LAUNCH'
 #!/usr/bin/python3
 import sys
 
-from pipeburn.gui import main
+try:
+    from pipeburn.gui import main
+except ImportError as e:
+    if "PySide6" not in str(e):
+        raise
+    sys.exit(
+        "Pipeburn needs PySide6, which this system does not provide as a package.\n"
+        "Install it with:  pip install --user --break-system-packages PySide6"
+    )
 
 sys.exit(main())
 LAUNCH
@@ -53,8 +61,8 @@ Section: utils
 Priority: optional
 Architecture: all
 Installed-Size: $SIZE
-Depends: python3 (>= 3.10), python3-pyside6.qtwidgets, pkexec | policykit-1, util-linux
-Recommends: python3-zstandard
+Depends: python3 (>= 3.10), pkexec | policykit-1, util-linux
+Recommends: python3-pyside6.qtwidgets, python3-zstandard
 Maintainer: Hexcrown <339384112+Hexcrown@users.noreply.github.com>
 Homepage: https://github.com/Hexcrown/pipeburn
 Description: Write an ISO from a URL straight to a USB drive
