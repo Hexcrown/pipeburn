@@ -8,15 +8,32 @@ Paste a link, pick a drive, and Pipeburn streams the image directly to the devic
 
 ## Install
 
+**Debian, Ubuntu, Mint** (needs `python3-pyside6.qtwidgets`, in Debian 12 / Ubuntu 23.04 and newer). Download the `.deb` from the [latest release](https://github.com/Hexcrown/pipeburn/releases/latest):
+
+```bash
+sudo apt install ./pipeburn_*_all.deb
+```
+
+**Arch:** build `packaging/arch/PKGBUILD` with `makepkg -si`.
+
+**Anywhere else, with pipx:**
+
+```bash
+pipx install pipeburn            # or: pipx install "pipeburn[zstd]" for .zst images
+pipeburn
+```
+
+**From source:**
+
 ```bash
 git clone https://github.com/Hexcrown/pipeburn
 cd pipeburn
 python3 -m venv .venv && . .venv/bin/activate
-pip install .            # or: pip install ".[zstd]" for .zst images on Python < 3.14
+pip install .
 pipeburn
 ```
 
-Needs `lsblk` and `umount` (util-linux, present on practically every distro) and `pkexec` (polkit) for the root prompt.
+Needs `lsblk` and `umount` (util-linux, present on practically every distro) and `pkexec` (polkit) for the root prompt. The `.deb` and Arch packages also install a root-owned helper and a polkit policy, so the password prompt says "Pipeburn" and the root code is never loaded from your home directory. Installs without them still work, but the prompt is the generic one.
 
 On macOS only `--dry-run` works so far. If you see a certificate error with a python.org install, run `Install Certificates.command` from the Python folder in Applications.
 
@@ -70,12 +87,12 @@ src/pipeburn/
   logs.py       log file, in-memory log for Copy log, URL redaction
   gui.py        PySide6 window
   assets/       app icon (svg, png, icns, ico)
-packaging/      .desktop launcher for Linux
+  theme.py      colours and Qt stylesheet
+packaging/      .deb build script, PKGBUILD, polkit policy, root helper, .desktop file
 ```
 
 ## Roadmap
 
-- polkit policy file so the password prompt names Pipeburn instead of `env`
 - Windows and macOS device backends
 - AppImage / Flatpak packaging
 - saved list of favorite image URLs

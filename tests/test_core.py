@@ -270,3 +270,23 @@ def test_theme_stylesheet_is_well_formed():
     for colour in (theme.BG, theme.EMBER, theme.STEEL):
         assert colour in css
     assert "QPushButton#primary" in css
+
+
+def test_package_version_matches_pyproject():
+    import tomllib
+    from pathlib import Path
+
+    from pipeburn import __version__
+
+    root = Path(core.__file__).resolve().parents[2]
+    data = tomllib.loads((root / "pyproject.toml").read_text())
+    assert data["project"]["version"] == __version__
+
+
+def test_helper_script_runs_isolated_and_only_calls_the_worker():
+    from pathlib import Path
+
+    root = Path(core.__file__).resolve().parents[2]
+    text = (root / "packaging" / "pipeburn-worker").read_text()
+    assert text.splitlines()[0] == "#!/usr/bin/python3 -I"
+    assert "pipeburn.worker" in text

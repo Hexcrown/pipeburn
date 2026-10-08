@@ -1,0 +1,6 @@
+#!/usr/bin/python3 -I
+import sys
+
+from pipeburn.worker import main
+
+sys.exit(main())

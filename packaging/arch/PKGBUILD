@@ -1,0 +1,33 @@
+# Maintainer: Hexcrown <339384112+Hexcrown@users.noreply.github.com>
+pkgname=pipeburn
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='Write an ISO from a URL straight to a USB drive'
+arch=('any')
+url='https://github.com/Hexcrown/pipeburn'
+license=('MIT')
+depends=('python' 'pyside6' 'polkit' 'util-linux')
+optdepends=('python-zstandard: .zst images')
+makedepends=('python-build' 'python-installer' 'python-setuptools' 'python-wheel')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+    cd "$pkgname-$pkgver"
+    python -m build --wheel --no-isolation
+}
+
+package() {
+    cd "$pkgname-$pkgver"
+    python -m installer --destdir="$pkgdir" dist/*.whl
+    install -Dm755 packaging/pipeburn-worker "$pkgdir/usr/libexec/pipeburn-worker"
+    sed -i '1s|.*|#!/usr/bin/python -I|' "$pkgdir/usr/libexec/pipeburn-worker"
+    install -Dm644 packaging/io.github.hexcrown.pipeburn.policy \
+        "$pkgdir/usr/share/polkit-1/actions/io.github.hexcrown.pipeburn.policy"
+    install -Dm644 packaging/pipeburn.desktop "$pkgdir/usr/share/applications/pipeburn.desktop"
+    install -Dm644 src/pipeburn/assets/pipeburn.png \
+        "$pkgdir/usr/share/icons/hicolor/512x512/apps/pipeburn.png"
+    install -Dm644 src/pipeburn/assets/pipeburn.svg \
+        "$pkgdir/usr/share/icons/hicolor/scalable/apps/pipeburn.svg"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

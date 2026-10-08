@@ -15,7 +15,9 @@ classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: X11 Applications :: Qt",
     "Operating System :: POSIX :: Linux",
+    "Intended Audience :: End Users/Desktop",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
     "Topic :: System :: Installation/Setup",
 ]
 dependencies = ["PySide6>=6.6"]
@@ -30,6 +32,8 @@ pipeburn-worker = "pipeburn.worker:main"
 
 [project.urls]
 Homepage = "https://github.com/Hexcrown/pipeburn"
+Issues = "https://github.com/Hexcrown/pipeburn/issues"
+Source = "https://github.com/Hexcrown/pipeburn"
 
 [tool.setuptools.packages.find]
 where = ["src"]
