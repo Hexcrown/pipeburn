@@ -5,13 +5,17 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import re
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import QProcess
 from PySide6.QtGui import QIcon
+from PySide6.QtNetwork import QLocalServer
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -30,7 +34,7 @@ from PySide6.QtWidgets import (
 
 from .core import PipeburnError
 from .devices import Device, list_usb_devices
-from .launcher import build_command
+from .launcher import build_command, needs_socket
 from .theme import STYLESHEET
 from .logs import LOGGER_NAME, build_report, recent_lines, redact_url, setup_logging
 from .util import human_bytes, human_duration
@@ -83,6 +87,11 @@ class MainWindow(QWidget):
         self._done: Optional[dict] = None
         self._error: Optional[dict] = None
         self._saw_progress = False
+        self._server: Optional[QLocalServer] = None
+        self._sock = None
+        self._sock_dir: Optional[str] = None
+        self._sock_buffer = ""
+        self._auth_failed = False
 
         self.url_edit = QLineEdit()
         self.url_edit.setPlaceholderText("https://example.org/distro.iso   (.iso.xz, .gz and .zst work too)")
@@ -253,6 +262,7 @@ class MainWindow(QWidget):
             return
         target = self._dry_run_path or device.path
         try:
+            connect = self._open_socket() if needs_socket(bool(self._dry_run_path)) else None
             command = build_command(
                 url=url,
                 device=target,
@@ -260,8 +270,10 @@ class MainWindow(QWidget):
                 verify=self.verify_check.isChecked(),
                 dry_run=bool(self._dry_run_path),
                 debug=self._debug,
+                connect=connect,
             )
         except PipeburnError as e:
+            self._close_socket()
             log.error("Could not build the helper command: %s", e)
             self._message("error", "Pipeburn", str(e))
             return
@@ -273,6 +285,8 @@ class MainWindow(QWidget):
         self._buffer = ""
         self._done = self._error = None
         self._saw_progress = False
+        self._auth_failed = False
+        self._sock_buffer = ""
         self.progress.setRange(0, _PROGRESS_STEPS)
         self.progress.setValue(0)
         self._set_status("Starting...")
@@ -285,10 +299,60 @@ class MainWindow(QWidget):
         self._proc.errorOccurred.connect(self._on_proc_error)
         self._proc.start(command[0], command[1:])
 
+    def _open_socket(self) -> str:
+        self._close_socket()
+        self._sock_dir = tempfile.mkdtemp(prefix="pb-")
+        path = os.path.join(self._sock_dir, "s")
+        server = QLocalServer(self)
+        QLocalServer.removeServer(path)
+        if not server.listen(path):
+            message = f"Could not create a local socket for the helper: {server.errorString()}"
+            self._close_socket()
+            raise PipeburnError(message)
+        server.newConnection.connect(self._on_connection)
+        self._server = server
+        log.debug("Listening for the helper on %s", path)
+        return path
+
+    def _close_socket(self) -> None:
+        if self._server is not None:
+            self._server.close()
+            self._server.deleteLater()
+            self._server = None
+        self._sock = None
+        if self._sock_dir:
+            shutil.rmtree(self._sock_dir, ignore_errors=True)
+            self._sock_dir = None
+
+    def _on_connection(self) -> None:
+        if self._server is None or self._sock is not None:
+            return
+        self._sock = self._server.nextPendingConnection()
+        self._sock.readyRead.connect(self._on_socket_data)
+        log.debug("The helper connected")
+        self._on_socket_data()
+
+    def _on_socket_data(self) -> None:
+        if self._sock is None:
+            return
+        self._sock_buffer += bytes(self._sock.readAll()).decode("utf-8", "replace")
+        while "\n" in self._sock_buffer:
+            line, self._sock_buffer = self._sock_buffer.split("\n", 1)
+            self._handle_line(line.strip())
+
+    def _send_cancel(self) -> None:
+        if self._sock is not None:
+            self._sock.write(b"cancel\n")
+            self._sock.flush()
+        elif self._server is not None and self._proc is not None:
+            self._proc.terminate()  # still at the password prompt; the helper never started
+        elif self._proc is not None:
+            self._proc.write(b"cancel\n")
+
     def cancel(self) -> None:
         if self._proc is not None:
             log.info("Cancel requested")
-            self._proc.write(b"cancel\n")
+            self._send_cancel()
             self.cancel_btn.setEnabled(False)
             self._set_status("Cancelling...")
 
@@ -310,7 +374,9 @@ class MainWindow(QWidget):
         if isinstance(event, dict) and "event" in event:
             self._handle_event(event)
         else:
-            log.warning("Helper output: %s", line)  # e.g. pkexec's own messages
+            if "User canceled" in line or "(-128)" in line:
+                self._auth_failed = True
+            log.warning("Helper output: %s", line)  # e.g. pkexec's or osascript's own messages
 
     def _handle_event(self, event: dict) -> None:
         kind = event["event"]
@@ -354,6 +420,14 @@ class MainWindow(QWidget):
         if self._buffer.strip():
             self._handle_line(self._buffer.strip())
         self._buffer = ""
+        if self._sock is not None:
+            while self._sock.waitForReadyRead(100):
+                self._on_socket_data()
+        self._on_socket_data()
+        if self._sock_buffer.strip():
+            self._handle_line(self._sock_buffer.strip())
+        self._sock_buffer = ""
+        self._close_socket()
         proc, self._proc = self._proc, None
         if proc is not None:
             proc.deleteLater()
@@ -373,7 +447,7 @@ class MainWindow(QWidget):
             else:
                 self._set_status("Failed: " + message.splitlines()[0])
                 self._message("error", "Burn failed", message)
-        elif exit_code in (126, 127):
+        elif exit_code in (126, 127) or self._auth_failed:
             log.warning("Authentication was cancelled or failed (exit code %s)", exit_code)
             self._set_status("Authentication was cancelled or failed.")
         else:
@@ -388,11 +462,11 @@ class MainWindow(QWidget):
             self._proc = None
             self._set_running(False)
             self._set_status("Could not start the helper process.")
-            self._message("error", "Pipeburn", "Could not start the helper process (is pkexec/polkit installed?).")
+            self._message("error", "Pipeburn", "Could not start the helper process (is pkexec/polkit installed on Linux?).")
 
     def closeEvent(self, event) -> None:
         if self._proc is not None:
-            self._proc.write(b"cancel\n")
+            self._send_cancel()
             self._proc.waitForFinished(5000)
         logging.getLogger(LOGGER_NAME).removeHandler(self._pane_handler)
         super().closeEvent(event)

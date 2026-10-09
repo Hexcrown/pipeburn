@@ -181,3 +181,48 @@ def test_cancelled_run_logs_it_and_ends_with_the_error_event(server, tmp_path):
     finally:
         proc.kill()
         proc.wait()
+
+
+def test_events_travel_over_a_unix_socket_and_cancel_comes_back(server, tmp_path, image_data):
+    import os
+    import socket
+    import tempfile
+    import threading
+
+    server.serve("/img", image_data)
+    sock_dir = tempfile.mkdtemp(prefix="pb-")
+    path = os.path.join(sock_dir, "s")
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(path)
+    listener.listen(1)
+    out = tmp_path / "out.img"
+    proc = subprocess.Popen(
+        [*WORKER, f"--url={server.url('/img')}", f"--device={out}", "--dry-run", f"--connect={path}"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    listener.settimeout(30)
+    conn, _ = listener.accept()
+    received = b""
+    conn.settimeout(30)
+    while True:
+        chunk = conn.recv(65536)
+        if not chunk:
+            break
+        received += chunk
+    proc.wait(timeout=30)
+    events = [json.loads(l) for l in received.decode().splitlines() if l.strip()]
+    kinds = [e["event"] for e in events]
+    assert proc.returncode == 0 and kinds[-1] == "done" and "progress" in kinds
+    assert proc.stdout.read().strip() == ""
+    assert out.read_bytes() == image_data
+    conn.close()
+    listener.close()
+
+
+def test_connecting_to_a_missing_socket_fails_cleanly(tmp_path):
+    proc = subprocess.run(
+        [*WORKER, "--url=http://127.0.0.1:9/x", f"--device={tmp_path / 'o'}", "--dry-run",
+         f"--connect={tmp_path / 'nope'}"],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert proc.returncode == 1 and "Could not connect" in proc.stderr

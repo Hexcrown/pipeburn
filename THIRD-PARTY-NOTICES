@@ -1,0 +1,15 @@
+Pipeburn is released under the MIT license (see LICENSE).
+
+The release .deb packages also include the following third-party software,
+unmodified, in /usr/lib/pipeburn/vendor:
+
+PySide6 / Qt for Python (PySide6-Essentials, shiboken6)
+  Copyright (C) The Qt Company Ltd.
+  Licensed under the GNU Lesser General Public License v3 (LGPL-3.0); it is
+  also available under GPL-2.0, GPL-3.0 and a commercial license.
+  Project:  https://www.qt.io/qt-for-python
+  Source:   https://code.qt.io/cgit/pyside/pyside-setup.git/
+  The full license texts ship inside the package, in
+  /usr/lib/pipeburn/vendor/PySide6_Essentials-*.dist-info/.
+  You may replace the bundled copy with another build of the same library by
+  installing it into that folder or system-wide; Pipeburn will use it.

@@ -45,6 +45,7 @@ install -m 644 "$ROOT/packaging/pipeburn.desktop" "$PKG/usr/share/applications/p
 install -m 644 "$ROOT/src/pipeburn/assets/pipeburn.png" "$PKG/usr/share/icons/hicolor/512x512/apps/pipeburn.png"
 install -m 644 "$ROOT/src/pipeburn/assets/pipeburn.svg" "$PKG/usr/share/icons/hicolor/scalable/apps/pipeburn.svg"
 install -m 644 "$ROOT/LICENSE" "$PKG/usr/share/doc/pipeburn/copyright"
+install -m 644 "$ROOT/THIRD-PARTY-NOTICES" "$PKG/usr/share/doc/pipeburn/THIRD-PARTY-NOTICES"
 
 cat > "$PKG/DEBIAN/postrm" <<'POSTRM'
 #!/bin/sh

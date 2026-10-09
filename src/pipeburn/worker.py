@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import signal
+import socket
 import sys
 import threading
 
@@ -25,12 +26,14 @@ from .util import RateMeter
 
 log = logging.getLogger("pipeburn.worker")
 _cancel = threading.Event()
+_out = None  # where events go; stdout unless --connect is used
 
 
 def _emit(event: str, **fields) -> None:
+    stream = _out if _out is not None else sys.stdout
     try:
-        sys.stdout.write(json.dumps({"event": event, **fields}) + "\n")
-        sys.stdout.flush()
+        stream.write(json.dumps({"event": event, **fields}) + "\n")
+        stream.flush()
     except (BrokenPipeError, ValueError, OSError):
         _cancel.set()  # nobody is listening any more
 
@@ -53,14 +56,25 @@ def _configure_logging(debug: bool) -> None:
     logger.addHandler(_JsonLogHandler())
 
 
-def _watch_stdin() -> None:
+def _watch_control(stream) -> None:
     try:
-        for line in sys.stdin:
+        for line in stream:
             if line.strip().lower() == "cancel":
                 break
     except (OSError, ValueError):
         pass
     _cancel.set()  # explicit cancel, or EOF because the GUI went away
+
+
+def _watch_stdin() -> None:
+    _watch_control(sys.stdin)
+
+
+def _connect(path: str):
+    """Connect to the GUI's local socket; returns (writer, reader) text streams."""
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.connect(path)
+    return sock.makefile("w", encoding="utf-8"), sock.makefile("r", encoding="utf-8")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -77,16 +91,27 @@ def build_parser() -> argparse.ArgumentParser:
                    help="treat --device as a plain file; skips USB checks and unmounting")
     p.add_argument("--control-stdin", action="store_true",
                    help="treat a 'cancel' line (or EOF) on stdin as cancel")
+    p.add_argument("--connect", metavar="SOCKET",
+                   help="send events to, and read 'cancel' from, this Unix socket instead of stdio")
     p.add_argument("--debug", action="store_true", help="send debug-level log events too")
     return p
 
 
 def main(argv=None) -> int:
+    global _out
     args = build_parser().parse_args(argv)
     _configure_logging(args.debug)
     signal.signal(signal.SIGTERM, lambda *_: _cancel.set())
     signal.signal(signal.SIGINT, lambda *_: _cancel.set())
-    if args.control_stdin:
+    _out = None
+    if args.connect:
+        try:
+            _out, reader = _connect(args.connect)
+        except OSError as e:
+            print(f"Could not connect to the Pipeburn window: {e}", file=sys.stderr)
+            return 1
+        threading.Thread(target=_watch_control, args=(reader,), daemon=True).start()
+    elif args.control_stdin:
         threading.Thread(target=_watch_stdin, daemon=True).start()
 
     state = {"phase": "write", "meter": RateMeter()}
@@ -104,12 +129,14 @@ def main(argv=None) -> int:
              getattr(os, "geteuid", lambda: "n/a")(), args.dry_run, args.debug)
     try:
         device_size = None
+        block_align = 1
         if args.dry_run:
             target = args.device
         else:
             _emit("phase", name="check")
             device = validate_target(args.device)
-            target, device_size = device.path, device.size
+            target, device_size = device.write_path, device.size
+            block_align = device.block_align
             _emit("phase", name="unmount")
             unmount_all(device)
         _emit("phase", name="write")
@@ -119,11 +146,12 @@ def main(argv=None) -> int:
             verify=not args.no_verify,
             decompress="none" if args.no_decompress else "auto",
             device_size=device_size,
+            block_align=block_align,
             progress=on_progress,
             cancel=_cancel,
         )
         if not args.dry_run:
-            reread_partitions(target)
+            reread_partitions(args.device)
         log.info("Finished successfully")
         _emit("done", **result.as_dict())
         return 0

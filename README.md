@@ -4,7 +4,7 @@
 
 Paste a link, pick a drive, and Pipeburn streams the image directly to the device while hashing it on the fly. It's the `curl | dd` workflow with a GUI and safety rails: USB-only device picker, a confirmation showing the drive's model and size, optional SHA256 verification, and on-the-fly `.xz` / `.gz` / `.zst` decompression.
 
-> **Status: early (v0.1), Linux only.** The core and GUI are tested against local HTTP servers and plain files. Try it on a spare stick first, because writing to a drive erases it.
+> **Status: early (v0.1).** Linux is tested on real drives; the macOS backend is new and being tested. The core and GUI are tested against local HTTP servers and plain files. Try it on a spare stick first, because writing to a drive erases it.
 
 ## Install
 
@@ -35,7 +35,7 @@ pipeburn
 
 Needs `lsblk` and `umount` (util-linux, present on practically every distro) and `pkexec` (polkit) for the root prompt. The `.deb` and Arch packages also install a root-owned helper and a polkit policy, so the password prompt says "Pipeburn" and the root code is never loaded from your home directory. Installs without them still work, but the prompt is the generic one.
 
-On macOS only `--dry-run` works so far. If you see a certificate error with a python.org install, run `Install Certificates.command` from the Python folder in Applications.
+**macOS (new, being tested):** install with `pipx install pipeburn` and run `pipeburn`. Pipeburn lists external USB drives with `diskutil`, asks for your administrator password through the standard macOS prompt, unmounts the drive and writes to its raw device. If you use a python.org Python and see a certificate error, run `Install Certificates.command` from the Python folder in Applications. A double-clickable `.app` is on the roadmap.
 
 Want to look around without touching a drive? Run `pipeburn --dry-run /tmp/test.img`. It writes to a file instead.
 
@@ -81,7 +81,8 @@ The core (`core.py`) is standard library only and has no GUI imports, so most te
 ```
 src/pipeburn/
   core.py       stream, decompress, hash, write, verify
-  devices.py    USB-only discovery and safety checks (lsblk)
+  devices.py    USB-only discovery and safety checks (lsblk, Linux)
+  devices_mac.py  the same for macOS (diskutil)
   worker.py     privileged helper, reports JSON lines
   launcher.py   builds the pkexec command
   logs.py       log file, in-memory log for Copy log, URL redaction
@@ -93,7 +94,7 @@ packaging/      .deb build script, PKGBUILD, polkit policy, root helper, .deskto
 
 ## Roadmap
 
-- Windows and macOS device backends
+- macOS `.app` / `.dmg` and a Windows backend
 - AppImage / Flatpak packaging
 - saved list of favorite image URLs
 

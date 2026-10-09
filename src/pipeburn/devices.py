@@ -1,4 +1,4 @@
-"""USB drive discovery and safety checks (Linux, via util-linux ``lsblk``)."""
+"""USB drive discovery and safety checks (``lsblk`` on Linux; see devices_mac.py for macOS)."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import subprocess
+import sys
 from dataclasses import dataclass
 from typing import Callable, Optional
 
@@ -41,6 +42,15 @@ class Device:
     model: str
     vendor: str
     mountpoints: tuple = ()  # deepest first, so they can be unmounted in order
+    raw_path: str = ""  # macOS: the unbuffered /dev/rdiskN twin of ``path``
+
+    @property
+    def write_path(self) -> str:
+        return self.raw_path or self.path
+
+    @property
+    def block_align(self) -> int:
+        return 4096 if self.raw_path else 1
 
     @property
     def label(self) -> str:
@@ -156,3 +166,7 @@ def reread_partitions(path: str) -> None:
             os.close(fd)
     except Exception as e:
         log.debug("Partition table re-read skipped: %s", e)
+
+
+if sys.platform == "darwin":
+    from .devices_mac import list_usb_devices, reread_partitions, unmount_all, validate_target  # noqa: E402,F401

@@ -311,6 +311,30 @@ def _drop_cache(fd: int) -> None:
         log.debug("Cache flush ioctl skipped: %s", e)
 
 
+def _set_nocache(fd: int) -> None:
+    """macOS: keep device I/O out of the unified buffer cache."""
+    try:
+        import fcntl
+
+        flag = getattr(fcntl, "F_NOCACHE", None)
+        if flag is not None:
+            fcntl.fcntl(fd, flag, 1)
+    except Exception as e:
+        log.debug("F_NOCACHE skipped: %s", e)
+
+
+def _full_sync(fd: int) -> None:
+    os.fsync(fd)
+    try:
+        import fcntl
+
+        flag = getattr(fcntl, "F_FULLFSYNC", None)
+        if flag is not None:  # macOS: fsync alone does not reach the platters/flash
+            fcntl.fcntl(fd, flag)
+    except Exception as e:
+        log.debug("F_FULLFSYNC skipped: %s", e)
+
+
 def _write_error(e: OSError, target: str) -> PipeburnError:
     if e.errno == errno.ENOSPC:
         return ImageTooLarge("The image is larger than the target drive.")
@@ -347,22 +371,32 @@ def verify_readback(
     expected_digest: str,
     progress: Optional[ProgressCb] = None,
     cancel: Optional[threading.Event] = None,
+    block_align: int = 1,
 ) -> bool:
-    """Re-read ``length`` bytes from ``target`` and compare their sha256."""
+    """Re-read ``length`` bytes from ``target`` and compare their sha256.
+
+    With ``block_align`` > 1 (raw devices on macOS) reads are rounded up to whole
+    blocks and the padding is left out of the hash.
+    """
     digest = hashlib.sha256()
-    done = 0
+    padded = -(-length // block_align) * block_align
+    pos = 0
     with open(target, "rb", buffering=0) as f:
+        _set_nocache(f.fileno())
         _drop_cache(f.fileno())
-        while done < length:
+        while pos < padded:
             _check_cancel(cancel)
-            data = f.read(min(WRITE_CHUNK, length - done))
+            data = f.read(min(WRITE_CHUNK, padded - pos))
             if not data:
-                log.warning("Read-back ended early at %d of %d bytes", done, length)
+                if pos >= length:
+                    break
+                log.warning("Read-back ended early at %d of %d bytes", pos, length)
                 return False  # target shorter than what we wrote
-            digest.update(data)
-            done += len(data)
+            keep = max(0, min(len(data), length - pos))
+            digest.update(data if keep == len(data) else data[:keep])
+            pos += len(data)
             if progress is not None:
-                progress("verify", done, length)
+                progress("verify", min(pos, length), length)
     matches = digest.hexdigest() == expected_digest
     if not matches:
         log.warning("Read-back hash differs: expected %s, got %s", expected_digest, digest.hexdigest())
@@ -380,6 +414,7 @@ def burn(
     progress: Optional[ProgressCb] = None,
     cancel: Optional[threading.Event] = None,
     timeout: float = 30.0,
+    block_align: int = 1,
 ) -> Result:
     """Stream ``url`` onto ``target`` (a block device or a plain file).
 
@@ -426,8 +461,9 @@ def burn(
 
         try:
             with open(target, "wb", buffering=0) as out:
+                _set_nocache(out.fileno())
 
-                def flush() -> None:
+                def flush(final: bool = False) -> None:
                     nonlocal written
                     if not buf:
                         return
@@ -435,12 +471,21 @@ def burn(
                         raise ImageTooLarge(
                             f"The decompressed image is larger than the drive ({human_bytes(device_size)})."
                         )
-                    _write_all(out, buf)
-                    sha_out.update(buf)
-                    if (written + len(buf)) // _LOG_STEP != written // _LOG_STEP:
-                        log.debug("Wrote %s so far", human_bytes(written + len(buf)))
-                    written += len(buf)
-                    buf.clear()
+                    real = len(buf)
+                    if block_align > 1 and not final:
+                        real -= real % block_align
+                        if not real:
+                            return
+                    data = buf if real == len(buf) else bytes(buf[:real])
+                    pad = (-real % block_align) if (final and block_align > 1) else 0
+                    if pad:
+                        data = bytes(data) + bytes(pad)
+                    _write_all(out, data)
+                    sha_out.update(data[:real] if pad else data)
+                    if (written + real) // _LOG_STEP != written // _LOG_STEP:
+                        log.debug("Wrote %s so far", human_bytes(written + real))
+                    written += real
+                    del buf[:real]
 
                 chunk = first
                 while chunk:
@@ -459,8 +504,8 @@ def burn(
                         f"of {human_bytes(total)}."
                     )
                 buf += decoder.finish()
-                flush()
-                os.fsync(out.fileno())
+                flush(final=True)
+                _full_sync(out.fileno())
                 _drop_cache(out.fileno())
         except OSError as e:
             raise _write_error(e, target) from e
@@ -483,7 +528,9 @@ def burn(
     verified: Optional[bool] = None
     if verify:
         log.info("Verifying what was written (%s)", human_bytes(written))
-        if not verify_readback(target, written, sha_out.hexdigest(), progress=emit, cancel=cancel):
+        if not verify_readback(
+            target, written, sha_out.hexdigest(), progress=emit, cancel=cancel, block_align=block_align
+        ):
             raise VerifyError(
                 "Read-back check failed: the drive did not keep what was written "
                 "(a failing or fake-capacity stick?)."

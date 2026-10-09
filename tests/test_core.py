@@ -290,3 +290,48 @@ def test_helper_script_runs_isolated_and_only_calls_the_worker():
     text = (root / "packaging" / "pipeburn-worker").read_text()
     assert text.splitlines()[0] == "#!/usr/bin/python3 -I"
     assert "pipeburn.worker" in text
+
+
+def test_block_aligned_write_pads_the_tail_but_not_the_hash(server, tmp_path, monkeypatch):
+    import os
+
+    monkeypatch.setattr(core, "READ_CHUNK", 5000)
+    monkeypatch.setattr(core, "WRITE_CHUNK", 8192)
+    data = os.urandom(100_003)
+    server.serve("/img", data)
+    out = tmp_path / "raw.img"
+    result = core.burn(server.url("/img"), str(out), block_align=4096)
+    written = out.read_bytes()
+    assert len(written) % 4096 == 0 and len(written) - len(data) < 4096
+    assert written[: len(data)] == data and set(written[len(data):]) <= {0}
+    assert result.written == len(data) and result.verified is True
+    assert result.sha256 == hashlib.sha256(data).hexdigest()
+
+
+def test_block_aligned_write_never_issues_an_unaligned_write(server, tmp_path, monkeypatch):
+    import os
+
+    sizes = []
+    real = core._write_all
+
+    def spy(f, data):
+        sizes.append(len(data))
+        real(f, data)
+
+    monkeypatch.setattr(core, "_write_all", spy)
+    monkeypatch.setattr(core, "READ_CHUNK", 3000)
+    monkeypatch.setattr(core, "WRITE_CHUNK", 8192)
+    data = os.urandom(70_001)
+    server.serve("/img", data)
+    core.burn(server.url("/img"), str(tmp_path / "o.img"), block_align=4096)
+    assert sizes and all(n % 4096 == 0 for n in sizes)
+
+
+def test_aligned_verify_ignores_padding(tmp_path):
+    import os
+
+    data = os.urandom(10_000)
+    path = tmp_path / "d.img"
+    path.write_bytes(data + bytes(4096 * 3 - len(data)))
+    assert core.verify_readback(str(path), len(data), hashlib.sha256(data).hexdigest(), block_align=4096)
+    assert not core.verify_readback(str(path), len(data), "0" * 64, block_align=4096)

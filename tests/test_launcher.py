@@ -96,3 +96,30 @@ def test_missing_helper_falls_back_to_env_python(monkeypatch):
     monkeypatch.setattr(launcher.os, "stat", nope)
     cmd = launcher.build_command(url="http://x/a.iso", device="/dev/sdb")
     assert cmd[1] == "/usr/bin/env" and "-m" in cmd
+
+
+def test_macos_uses_osascript_and_a_socket(monkeypatch):
+    monkeypatch.setattr(launcher.sys, "platform", "darwin")
+    monkeypatch.setattr(launcher.os, "geteuid", lambda: 501)
+    assert launcher.needs_socket() and not launcher.needs_socket(dry_run=True)
+    cmd = launcher.build_command(
+        url='https://x/a.iso?q="1"&r=$(touch /tmp/pwned)', device="/dev/disk4",
+        connect="/tmp/pb-x/s", debug=True,
+    )
+    assert cmd[:2] == ["/usr/bin/osascript", "-e"] and len(cmd) == 3
+    script = cmd[2]
+    assert script.startswith("do shell script ") and "with administrator privileges" in script
+    assert "--device=/dev/disk4" in script and "--connect=/tmp/pb-x/s" in script and "--debug" in script
+    assert "--control-stdin" not in script
+    assert "'--url=https://x/a.iso?q=\\\"1\\\"&r=$(touch /tmp/pwned)'" in script
+
+
+def test_applescript_strings_escape_quotes_and_backslashes():
+    assert launcher.applescript_string('a"b\\c') == '"a\\"b\\\\c"'
+
+
+def test_macos_dry_run_runs_the_worker_directly(monkeypatch):
+    monkeypatch.setattr(launcher.sys, "platform", "darwin")
+    monkeypatch.setattr(launcher.os, "geteuid", lambda: 501)
+    cmd = launcher.build_command(url="http://x/a.iso", device="out.img", dry_run=True, connect="/tmp/s")
+    assert cmd[0] == sys.executable and "--dry-run" in cmd and "--control-stdin" in cmd
